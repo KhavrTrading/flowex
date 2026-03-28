@@ -13,6 +13,23 @@ Production-tested Go library for real-time cryptocurrency market data via WebSoc
 go get github.com/KhavrTrading/flowex
 ```
 
+Requires **Go 1.22+**
+
+## Package Map
+
+```
+flowex/
+  binance/     — Binance Futures WebSocket manager
+  bybit/       — Bybit Linear WebSocket manager
+  bitget/      — Bitget Futures/Spot WebSocket manager
+  ws/          — Core engine: client, worker, manager, snapshots
+  models/      — Candle, Trade, Ticker types
+  depth/       — Order book metrics (75 fields) + time-bucketed store
+  candles/     — REST fetchers + timeframe aggregation
+  indicators/  — EMA, RSI, MACD, ATR, Bollinger, StochRSI, S/R
+  examples/    — Working examples
+```
+
 ## Quick Start
 
 ```go
@@ -59,6 +76,8 @@ func main() {
     mgr.Shutdown()
 }
 ```
+
+See [examples/basic/main.go](examples/basic/main.go) for a complete working example with worker hooks, snapshot polling, and metrics monitoring.
 
 ---
 
@@ -340,7 +359,17 @@ mgr := bitget.NewManagerWithConfig(cfg)
 
 ## Reading Data: Snapshots
 
-Every symbol produces immutable snapshots every second (configurable). Read them lock-free from any goroutine:
+Every symbol produces immutable snapshots every second (configurable). Read them lock-free from any goroutine.
+
+```go
+// Snapshot is an immutable, point-in-time view of a symbol's state.
+type Snapshot struct {
+    Timestamp  time.Time               // when the snapshot was taken
+    Candles    []models.CandleHLCV     // historical + live candle bars
+    DepthStore *depth.Store            // order book metrics with time-bucketed storage
+    Trades     []models.NormalizedTrade // recent trades, normalized across exchanges
+}
+```
 
 ```go
 snap := mgr.GetSnapshot("BTCUSDT")
@@ -369,6 +398,54 @@ if latest != nil {
 
 // Historical depth (last 30 seconds)
 recent := snap.DepthStore.GetLastNSeconds(30)
+```
+
+---
+
+## Data Models
+
+### CandleHLCV
+
+```go
+type CandleHLCV struct {
+    Ts     int64   // Unix millisecond timestamp
+    Open   float64
+    High   float64
+    Low    float64
+    Close  float64
+    Volume float64
+}
+```
+
+Helper methods: `GetTimestamp()`, `HL2()`, `HLC3()`.
+
+### CandleHLC
+
+Lighter candle without Open/Volume — used by ATR, Bollinger, and Support/Resistance indicators.
+
+```go
+type CandleHLC struct {
+    High  float64
+    Low   float64
+    Close float64
+}
+```
+
+### NormalizedTrade
+
+Unified trade format across all exchanges.
+
+```go
+type NormalizedTrade struct {
+    Timestamp int64   // Unix milliseconds
+    Price     float64
+    Size      float64 // base currency
+    SizeUSD   float64
+    Side      string  // "buy" or "sell"
+    TradeID   string
+    Symbol    string  // e.g. "BTCUSDT"
+    Exchange  string  // "binance", "bybit", "bitget"
+}
 ```
 
 ---
@@ -547,9 +624,12 @@ supportPct, resistancePct, srScore := indicators.SupportResistance(hlcCandles, 5
 | `bybit/` | Bybit V5 Linear adapter (depth 1/50/200/500, all candle intervals) |
 | `bitget/` | Bitget V2 adapter (books/books5/books15, spot/futures, all candle intervals) |
 | `models/` | CandleHLC, CandleHLCV, NormalizedTrade, TickerData |
-| `depth/` | Order book metrics (100+ fields) + time-bucketed store with enrichment |
+| `depth/` | Order book metrics (75 fields) + time-bucketed store with enrichment |
 | `indicators/` | EMA, RSI, ATR, MACD, StochRSI, Bollinger, Support/Resistance |
+| `indicators/technical/` | Batch-optimized calculator, ADX, MMI, signal types, movement tracking |
 | `candles/` | REST fetchers (Binance/Bybit/Bitget) + timeframe aggregator |
+
+See [DOCUMENTATION.md](DOCUMENTATION.md) for the full API reference — all 75 depth metric fields, store query methods, worker monitoring, historical data seeding, and more.
 
 ## Dependencies
 
