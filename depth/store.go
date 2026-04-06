@@ -199,6 +199,27 @@ func (s *Store) Size() int {
 	return s.TotalMetrics
 }
 
+// GetRecentN returns the last n metrics from the recent buffer.
+// If n >= buffer length, returns all metrics.
+func (s *Store) GetRecentN(n int) []DepthMetrics {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if n >= len(s.Recent) {
+		out := make([]DepthMetrics, len(s.Recent))
+		copy(out, s.Recent)
+		return out
+	}
+	out := make([]DepthMetrics, n)
+	copy(out, s.Recent[len(s.Recent)-n:])
+	return out
+}
+
+// GetMetricsByTimeRangeClamped returns metrics within [startMs, endMs], clamped to available data.
+// Alias for GetByTimeRange which already clamps to store bounds.
+func (s *Store) GetMetricsByTimeRangeClamped(startMs, endMs int64) []DepthMetrics {
+	return s.GetByTimeRange(startMs, endMs)
+}
+
 // --- enrichment helpers ---
 
 func fastSqrt(x float64) float64 {

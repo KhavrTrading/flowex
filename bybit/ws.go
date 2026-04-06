@@ -2,7 +2,6 @@ package bybit
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/KhavrTrading/flowex/ws"
@@ -110,17 +109,8 @@ func (m *Manager) SubscribeCandleWithInterval(symbol, interval string, handler w
 	sc.interval = interval
 
 	simple := ToSimpleSymbol(symbol)
-	SetCandleCallback(symbol, func(push CandlePushData) {
-		for _, k := range push.Data {
-			worker.EnqueueCandle(ws.CandleMsg{
-				Timestamp: k.Start,
-				Open:      k.Open,
-				High:      k.High,
-				Low:       k.Low,
-				Close:     k.Close,
-				Volume:    k.Volume,
-			})
-		}
+	SetCandleCallback(symbol, func(msg ws.CandleMsg) {
+		worker.EnqueueCandle(msg)
 	})
 
 	m.ActivateStream(symbol, ws.StreamCandle)
@@ -145,12 +135,8 @@ func (m *Manager) SubscribeDepthWithLevel(symbol string, level DepthLevel, handl
 	sc.depthLevel = level
 
 	simple := ToSimpleSymbol(symbol)
-	SetDepthCallback(symbol, func(push DepthPushData) {
-		worker.EnqueueDepth(ws.DepthMsg{
-			Bids:      push.Data.Bids,
-			Asks:      push.Data.Asks,
-			Timestamp: push.TS,
-		})
+	SetDepthCallback(symbol, func(msg ws.DepthMsg) {
+		worker.EnqueueDepth(msg)
 	})
 
 	m.ActivateStream(symbol, ws.StreamDepth)
@@ -166,17 +152,8 @@ func (m *Manager) SubscribeTrade(symbol string, handler ws.TradeHandler) error {
 	}
 
 	simple := ToSimpleSymbol(symbol)
-	SetTradeCallback(symbol, func(push TradePushData) {
-		for _, t := range push.Data {
-			side := strings.ToLower(t.Side)
-			worker.EnqueueTrade(ws.TradeMsg{
-				TradeID:   t.TradeID,
-				Price:     t.Price,
-				Quantity:  t.Size,
-				Side:      side,
-				Timestamp: t.Timestamp,
-			})
-		}
+	SetTradeCallback(symbol, func(msg ws.TradeMsg) {
+		worker.EnqueueTrade(msg)
 	})
 
 	m.ActivateStream(symbol, ws.StreamTrade)

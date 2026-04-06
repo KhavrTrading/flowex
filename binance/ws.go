@@ -135,19 +135,8 @@ func (m *Manager) SubscribeCandleWithInterval(symbol, interval string, handler w
 	sc := m.getStreamCfg(symbol)
 	sc.interval = interval
 
-	SetCandleCallback(symbol, func(push CandlePushData) {
-		if push.Kline == nil {
-			return
-		}
-		k := push.Kline
-		worker.EnqueueCandle(ws.CandleMsg{
-			Timestamp: k.StartTime,
-			Open:      k.Open,
-			High:      k.High,
-			Low:       k.Low,
-			Close:     k.Close,
-			Volume:    k.Volume,
-		})
+	SetCandleCallback(symbol, func(msg ws.CandleMsg) {
+		worker.EnqueueCandle(msg)
 	})
 
 	m.ActivateStream(symbol, ws.StreamCandle)
@@ -172,12 +161,8 @@ func (m *Manager) SubscribeDepthWithConfig(symbol string, level DepthLevel, spee
 	sc.depthLevel = level
 	sc.depthSpeed = speed
 
-	SetDepthCallback(symbol, func(push DepthPushData) {
-		worker.EnqueueDepth(ws.DepthMsg{
-			Bids:      push.Bids,
-			Asks:      push.Asks,
-			Timestamp: push.EventTime,
-		})
+	SetDepthCallback(symbol, func(msg ws.DepthMsg) {
+		worker.EnqueueDepth(msg)
 	})
 
 	m.ActivateStream(symbol, ws.StreamDepth)
@@ -201,14 +186,8 @@ func (m *Manager) SubscribeTradeWithMode(symbol string, mode TradeMode, handler 
 	sc := m.getStreamCfg(symbol)
 	sc.tradeMode = mode
 
-	SetTradeCallback(symbol, func(push TradePushData) {
-		worker.EnqueueTrade(ws.TradeMsg{
-			TradeID:      fmt.Sprintf("%d", push.TradeID),
-			Price:        push.Price,
-			Quantity:     push.Quantity,
-			IsBuyerMaker: push.IsBuyerMaker,
-			Timestamp:    push.TradeTime,
-		})
+	SetTradeCallback(symbol, func(msg ws.TradeMsg) {
+		worker.EnqueueTrade(msg)
 	})
 
 	m.ActivateStream(symbol, ws.StreamTrade)

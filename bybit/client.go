@@ -1,12 +1,12 @@
 package bybit
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/KhavrTrading/flowex/ws"
+	"github.com/valyala/fastjson"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -18,7 +18,7 @@ func NewClient(symbol string) (*ws.BaseClient, error) {
 	// Bybit needs a 15-second ping
 	cfg.PingInterval = 15 * time.Second
 	cfg.PingMessage = func() ([]byte, error) {
-		return json.Marshal(map[string]interface{}{"op": "ping"})
+		return []byte(`{"op":"ping"}`), nil
 	}
 
 	client := ws.NewBaseClient(symbol, cfg)
@@ -32,73 +32,83 @@ func NewClient(symbol string) (*ws.BaseClient, error) {
 
 // SubscribeStream subscribes to a named Bybit stream (e.g., "kline.1.BTCUSDT").
 func SubscribeStream(client *ws.BaseClient, streamName string) error {
-	req := map[string]interface{}{
-		"op":   "subscribe",
-		"args": []string{streamName},
-	}
-	payload, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("marshal subscribe: %w", err)
-	}
-	return client.WriteMessage(payload)
+	payload := fmt.Sprintf(`{"op":"subscribe","args":["%s"]}`, streamName)
+	return client.WriteMessage([]byte(payload))
 }
 
-// Callbacks set by the manager
+// Callbacks set by the manager — typed as ws.*Msg for zero-copy dispatch.
 var (
-	candleCallbacks = make(map[string]func(CandlePushData))
-	depthCallbacks  = make(map[string]func(DepthPushData))
-	tradeCallbacks  = make(map[string]func(TradePushData))
+	candleCallbacks = make(map[string]func(ws.CandleMsg))
+	depthCallbacks  = make(map[string]func(ws.DepthMsg))
+	tradeCallbacks  = make(map[string]func(ws.TradeMsg))
 )
 
 // SetCandleCallback registers a candle callback for a symbol.
-func SetCandleCallback(symbol string, cb func(CandlePushData)) {
+func SetCandleCallback(symbol string, cb func(ws.CandleMsg)) {
 	candleCallbacks[symbol] = cb
 }
 
 // SetDepthCallback registers a depth callback for a symbol.
-func SetDepthCallback(symbol string, cb func(DepthPushData)) {
+func SetDepthCallback(symbol string, cb func(ws.DepthMsg)) {
 	depthCallbacks[symbol] = cb
 }
 
 // SetTradeCallback registers a trade callback for a symbol.
-func SetTradeCallback(symbol string, cb func(TradePushData)) {
+func SetTradeCallback(symbol string, cb func(ws.TradeMsg)) {
 	tradeCallbacks[symbol] = cb
 }
 
 func makeDispatcher(client *ws.BaseClient, symbol string) ws.DispatchFunc {
+	var p fastjson.Parser
 	return func(msg []byte) {
-		var rawMsg map[string]interface{}
-		if err := json.Unmarshal(msg, &rawMsg); err != nil {
+		v, err := p.ParseBytes(msg)
+		if err != nil {
 			return
 		}
 
 		// Pong response
-		if op, ok := rawMsg["op"].(string); ok && op == "pong" {
+		if string(v.GetStringBytes("op")) == "pong" {
 			return
 		}
 
-		topic, _ := rawMsg["topic"].(string)
+		topic := string(v.GetStringBytes("topic"))
 
 		switch {
 		case strings.HasPrefix(topic, "kline."):
 			if cb := candleCallbacks[symbol]; cb != nil {
-				var push CandlePushData
-				if err := json.Unmarshal(msg, &push); err == nil {
-					cb(push)
+				for _, item := range v.GetArray("data") {
+					cb(ws.CandleMsg{
+						Timestamp: item.GetInt64("start"),
+						Open:      string(item.GetStringBytes("open")),
+						High:      string(item.GetStringBytes("high")),
+						Low:       string(item.GetStringBytes("low")),
+						Close:     string(item.GetStringBytes("close")),
+						Volume:    string(item.GetStringBytes("volume")),
+					})
 				}
 			}
 		case strings.HasPrefix(topic, "orderbook."):
 			if cb := depthCallbacks[symbol]; cb != nil {
-				var push DepthPushData
-				if err := json.Unmarshal(msg, &push); err == nil {
-					cb(push)
+				d := v.Get("data")
+				if d == nil {
+					return
 				}
+				cb(ws.DepthMsg{
+					Bids:      parseStringPairs(d.GetArray("b")),
+					Asks:      parseStringPairs(d.GetArray("a")),
+					Timestamp: v.GetInt64("ts"),
+				})
 			}
 		case strings.HasPrefix(topic, "publicTrade."):
 			if cb := tradeCallbacks[symbol]; cb != nil {
-				var push TradePushData
-				if err := json.Unmarshal(msg, &push); err == nil {
-					cb(push)
+				for _, item := range v.GetArray("data") {
+					cb(ws.TradeMsg{
+						TradeID:   string(item.GetStringBytes("i")),
+						Price:     string(item.GetStringBytes("p")),
+						Quantity:  string(item.GetStringBytes("v")),
+						Side:      strings.ToLower(string(item.GetStringBytes("S"))),
+						Timestamp: item.GetInt64("T"),
+					})
 				}
 			}
 		default:
@@ -107,6 +117,25 @@ func makeDispatcher(client *ws.BaseClient, symbol string) ws.DispatchFunc {
 			}
 		}
 	}
+}
+
+// parseStringPairs converts a fastjson array of [price, qty] pairs to [][]string.
+func parseStringPairs(arr []*fastjson.Value) [][]string {
+	if len(arr) == 0 {
+		return nil
+	}
+	result := make([][]string, 0, len(arr))
+	for _, item := range arr {
+		pair := item.GetArray()
+		if len(pair) < 2 {
+			continue
+		}
+		result = append(result, []string{
+			string(pair[0].GetStringBytes()),
+			string(pair[1].GetStringBytes()),
+		})
+	}
+	return result
 }
 
 // ToSimpleSymbol converts "BTC/USDT:USDT" to "BTCUSDT".

@@ -54,27 +54,7 @@ func NewCandleHLCVFromSlice(slice []string) (CandleHLCV, error) {
 	if err != nil {
 		return CandleHLCV{}, err
 	}
-	open, err := strconv.ParseFloat(slice[1], 64)
-	if err != nil {
-		return CandleHLCV{}, err
-	}
-	high, err := strconv.ParseFloat(slice[2], 64)
-	if err != nil {
-		return CandleHLCV{}, err
-	}
-	low, err := strconv.ParseFloat(slice[3], 64)
-	if err != nil {
-		return CandleHLCV{}, err
-	}
-	cl, err := strconv.ParseFloat(slice[4], 64)
-	if err != nil {
-		return CandleHLCV{}, err
-	}
-	volume, err := strconv.ParseFloat(slice[5], 64)
-	if err != nil {
-		return CandleHLCV{}, err
-	}
-	return CandleHLCV{Ts: ts, Open: open, High: high, Low: low, Close: cl, Volume: volume}, nil
+	return NewCandleHLCVFromStrings(ts, slice[1], slice[2], slice[3], slice[4], slice[5])
 }
 
 // NewCandleHLCVFromStrings parses a CandleHLCV from individual string fields.

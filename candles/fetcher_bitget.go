@@ -1,12 +1,12 @@
 package candles
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 
 	"github.com/KhavrTrading/flowex/models"
+	"github.com/valyala/fastjson"
 )
 
 // FetchBitgetCandles fetches historical klines from Bitget V2 REST API.
@@ -29,29 +29,35 @@ func FetchBitgetCandles(symbol, granularity string, limit int) ([]models.CandleH
 		return nil, fmt.Errorf("bitget klines status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var result struct {
-		Code string     `json:"code"`
-		Msg  string     `json:"msg"`
-		Data [][]string `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("bitget klines decode: %w", err)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("bitget klines read: %w", err)
 	}
 
-	if result.Code != "00000" {
-		return nil, fmt.Errorf("bitget API error: %s", result.Msg)
+	v, err := fastjson.ParseBytes(body)
+	if err != nil {
+		return nil, fmt.Errorf("bitget klines parse: %w", err)
 	}
+
+	if string(v.GetStringBytes("code")) != "00000" {
+		return nil, fmt.Errorf("bitget API error: %s", string(v.GetStringBytes("msg")))
+	}
+
+	raw := v.GetArray("data")
 
 	// Bitget returns newest first — reverse for chronological order
-	raw := result.Data
 	candles := make([]models.CandleHLCV, 0, len(raw))
 	for i := len(raw) - 1; i >= 0; i-- {
-		row := raw[i]
-		if len(row) < 6 {
+		items := raw[i].GetArray()
+		if len(items) < 6 {
 			continue
 		}
-		// Bitget format: [timestamp, open, high, low, close, volume, ...]
-		c, err := models.NewCandleHLCVFromSlice(row[:6])
+		// Bitget format: [timestamp, open, high, low, close, volume, ...] — all strings
+		slice := make([]string, 6)
+		for j := 0; j < 6; j++ {
+			slice[j] = string(items[j].GetStringBytes())
+		}
+		c, err := models.NewCandleHLCVFromSlice(slice)
 		if err != nil {
 			continue
 		}

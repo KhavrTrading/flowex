@@ -1,12 +1,12 @@
 package binance
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/KhavrTrading/flowex/ws"
+	"github.com/valyala/fastjson"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -27,16 +27,8 @@ func NewClient(symbol string) (*ws.BaseClient, error) {
 
 // SubscribeStream subscribes to a named Binance stream (e.g., "btcusdt@kline_1m").
 func SubscribeStream(client *ws.BaseClient, streamName string, id int) error {
-	req := map[string]interface{}{
-		"method": "SUBSCRIBE",
-		"params": []string{streamName},
-		"id":     id,
-	}
-	payload, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("marshal subscribe: %w", err)
-	}
-	return client.WriteMessage(payload)
+	payload := fmt.Sprintf(`{"method":"SUBSCRIBE","params":["%s"],"id":%d}`, streamName, id)
+	return client.WriteMessage([]byte(payload))
 }
 
 // CandleStreamName returns the Binance stream name for candles.
@@ -75,70 +67,90 @@ func TradeStreamName(symbol string) string {
 	return fmt.Sprintf("%s@trade", strings.ToLower(symbol))
 }
 
-// Callbacks set by the manager
+// Callbacks set by the manager — typed as ws.*Msg for zero-copy dispatch.
 var (
-	candleCallbacks = make(map[string]func(CandlePushData))
-	depthCallbacks  = make(map[string]func(DepthPushData))
-	tradeCallbacks  = make(map[string]func(TradePushData))
+	candleCallbacks = make(map[string]func(ws.CandleMsg))
+	depthCallbacks  = make(map[string]func(ws.DepthMsg))
+	tradeCallbacks  = make(map[string]func(ws.TradeMsg))
 )
 
 // SetCandleCallback registers a candle callback for a symbol.
-func SetCandleCallback(symbol string, cb func(CandlePushData)) {
+func SetCandleCallback(symbol string, cb func(ws.CandleMsg)) {
 	candleCallbacks[symbol] = cb
 }
 
 // SetDepthCallback registers a depth callback for a symbol.
-func SetDepthCallback(symbol string, cb func(DepthPushData)) {
+func SetDepthCallback(symbol string, cb func(ws.DepthMsg)) {
 	depthCallbacks[symbol] = cb
 }
 
 // SetTradeCallback registers a trade callback for a symbol.
-func SetTradeCallback(symbol string, cb func(TradePushData)) {
+func SetTradeCallback(symbol string, cb func(ws.TradeMsg)) {
 	tradeCallbacks[symbol] = cb
 }
 
 func makeDispatcher(client *ws.BaseClient, symbol string) ws.DispatchFunc {
+	var p fastjson.Parser
 	return func(msg []byte) {
-		var rawMsg map[string]interface{}
-		if err := json.Unmarshal(msg, &rawMsg); err != nil {
+		v, err := p.ParseBytes(msg)
+		if err != nil {
 			return
 		}
 
-		eventType, _ := rawMsg["e"].(string)
+		eventType := string(v.GetStringBytes("e"))
 
 		// Detect depth snapshots (no "e" field but has "bids"/"asks")
 		if eventType == "" {
-			if _, hasBids := rawMsg["bids"]; hasBids {
-				if _, hasAsks := rawMsg["asks"]; hasAsks {
-					eventType = "depthSnapshot"
-				}
+			if v.Exists("bids") && v.Exists("asks") {
+				eventType = "depthSnapshot"
 			}
 		}
 
 		switch eventType {
 		case "kline":
 			if cb := candleCallbacks[symbol]; cb != nil {
-				var push CandlePushData
-				if err := json.Unmarshal(msg, &push); err == nil {
-					cb(push)
+				k := v.Get("k")
+				if k == nil {
+					return
 				}
+				cb(ws.CandleMsg{
+					Timestamp: k.GetInt64("t"),
+					Open:      string(k.GetStringBytes("o")),
+					High:      string(k.GetStringBytes("h")),
+					Low:       string(k.GetStringBytes("l")),
+					Close:     string(k.GetStringBytes("c")),
+					Volume:    string(k.GetStringBytes("v")),
+				})
 			}
 		case "depthUpdate", "depthSnapshot":
 			if cb := depthCallbacks[symbol]; cb != nil {
-				var push DepthPushData
-				if err := json.Unmarshal(msg, &push); err == nil {
-					if push.EventTime == 0 {
-						push.EventTime = time.Now().UnixMilli()
-					}
-					cb(push)
+				bids := parseStringPairs(v.GetArray("b"))
+				if bids == nil {
+					bids = parseStringPairs(v.GetArray("bids"))
 				}
+				asks := parseStringPairs(v.GetArray("a"))
+				if asks == nil {
+					asks = parseStringPairs(v.GetArray("asks"))
+				}
+				eventTime := v.GetInt64("E")
+				if eventTime == 0 {
+					eventTime = time.Now().UnixMilli()
+				}
+				cb(ws.DepthMsg{
+					Bids:      bids,
+					Asks:      asks,
+					Timestamp: eventTime,
+				})
 			}
 		case "aggTrade", "trade":
 			if cb := tradeCallbacks[symbol]; cb != nil {
-				var push TradePushData
-				if err := json.Unmarshal(msg, &push); err == nil {
-					cb(push)
-				}
+				cb(ws.TradeMsg{
+					TradeID:      fmt.Sprintf("%d", v.GetInt64("t")),
+					Price:        string(v.GetStringBytes("p")),
+					Quantity:     string(v.GetStringBytes("q")),
+					IsBuyerMaker: v.GetBool("m"),
+					Timestamp:    v.GetInt64("T"),
+				})
 			}
 		default:
 			if eventType != "" {
@@ -146,4 +158,23 @@ func makeDispatcher(client *ws.BaseClient, symbol string) ws.DispatchFunc {
 			}
 		}
 	}
+}
+
+// parseStringPairs converts a fastjson array of [price, qty] pairs to [][]string.
+func parseStringPairs(arr []*fastjson.Value) [][]string {
+	if len(arr) == 0 {
+		return nil
+	}
+	result := make([][]string, 0, len(arr))
+	for _, item := range arr {
+		pair := item.GetArray()
+		if len(pair) < 2 {
+			continue
+		}
+		result = append(result, []string{
+			string(pair[0].GetStringBytes()),
+			string(pair[1].GetStringBytes()),
+		})
+	}
+	return result
 }

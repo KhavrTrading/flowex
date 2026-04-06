@@ -1,12 +1,13 @@
 package bitget
 
 import (
-	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/KhavrTrading/flowex/ws"
+	"github.com/valyala/fastjson"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -32,96 +33,118 @@ func NewClient(symbol string) (*ws.BaseClient, error) {
 
 // SubscribeStream subscribes to a Bitget stream.
 func SubscribeStream(client *ws.BaseClient, instType, channel, instId string) error {
-	req := map[string]interface{}{
-		"op": "subscribe",
-		"args": []map[string]string{
-			{
-				"instType": instType,
-				"channel":  channel,
-				"instId":   instId,
-			},
-		},
-	}
-	payload, err := json.Marshal(req)
-	if err != nil {
-		return err
-	}
-	return client.WriteMessage(payload)
+	payload := fmt.Sprintf(`{"op":"subscribe","args":[{"instType":"%s","channel":"%s","instId":"%s"}]}`,
+		instType, channel, instId)
+	return client.WriteMessage([]byte(payload))
 }
 
-// Callbacks set by the manager
+// Callbacks set by the manager — typed as ws.*Msg for zero-copy dispatch.
 var (
-	candleCallbacks = make(map[string]func(CandlePushData))
-	depthCallbacks  = make(map[string]func(DepthPushData))
-	tradeCallbacks  = make(map[string]func(TradePushData))
+	candleCallbacks = make(map[string]func(ws.CandleMsg))
+	depthCallbacks  = make(map[string]func(ws.DepthMsg))
+	tradeCallbacks  = make(map[string]func(ws.TradeMsg))
 )
 
 // SetCandleCallback registers a candle callback for a symbol.
-func SetCandleCallback(symbol string, cb func(CandlePushData)) {
+func SetCandleCallback(symbol string, cb func(ws.CandleMsg)) {
 	candleCallbacks[symbol] = cb
 }
 
 // SetDepthCallback registers a depth callback for a symbol.
-func SetDepthCallback(symbol string, cb func(DepthPushData)) {
+func SetDepthCallback(symbol string, cb func(ws.DepthMsg)) {
 	depthCallbacks[symbol] = cb
 }
 
 // SetTradeCallback registers a trade callback for a symbol.
-func SetTradeCallback(symbol string, cb func(TradePushData)) {
+func SetTradeCallback(symbol string, cb func(ws.TradeMsg)) {
 	tradeCallbacks[symbol] = cb
 }
 
 func makeDispatcher(client *ws.BaseClient, symbol string) ws.DispatchFunc {
+	var p fastjson.Parser
 	return func(msg []byte) {
-		raw := string(msg)
-
 		// Bitget sends "pong" as plain text
-		if raw == "pong" {
+		if len(msg) == 4 && string(msg) == "pong" {
 			return
 		}
 
-		var rawMsg map[string]interface{}
-		if err := json.Unmarshal(msg, &rawMsg); err != nil {
+		v, err := p.ParseBytes(msg)
+		if err != nil {
 			return
 		}
 
-		// Get channel from arg.channel
-		argRaw, ok := rawMsg["arg"]
-		if !ok {
+		arg := v.Get("arg")
+		if arg == nil {
 			return
 		}
-		argMap, ok := argRaw.(map[string]interface{})
-		if !ok {
-			return
-		}
-		channel, _ := argMap["channel"].(string)
+		channel := string(arg.GetStringBytes("channel"))
 
 		switch {
 		case strings.HasPrefix(channel, "candle"):
 			if cb := candleCallbacks[symbol]; cb != nil {
-				var push CandlePushData
-				if err := json.Unmarshal(msg, &push); err == nil {
-					cb(push)
+				for _, item := range v.GetArray("data") {
+					row := item.GetArray()
+					if len(row) < 6 {
+						continue
+					}
+					ts, _ := strconv.ParseInt(string(row[0].GetStringBytes()), 10, 64)
+					cb(ws.CandleMsg{
+						Timestamp: ts,
+						Open:      string(row[1].GetStringBytes()),
+						High:      string(row[2].GetStringBytes()),
+						Low:       string(row[3].GetStringBytes()),
+						Close:     string(row[4].GetStringBytes()),
+						Volume:    string(row[5].GetStringBytes()),
+					})
 				}
 			}
 		case strings.HasPrefix(channel, "books"):
 			if cb := depthCallbacks[symbol]; cb != nil {
-				var push DepthPushData
-				if err := json.Unmarshal(msg, &push); err == nil {
-					cb(push)
+				for _, item := range v.GetArray("data") {
+					ts, _ := strconv.ParseInt(string(item.GetStringBytes("ts")), 10, 64)
+					cb(ws.DepthMsg{
+						Bids:      parseStringPairs(item.GetArray("bids")),
+						Asks:      parseStringPairs(item.GetArray("asks")),
+						Timestamp: ts,
+					})
 				}
 			}
 		case channel == "trade":
 			if cb := tradeCallbacks[symbol]; cb != nil {
-				var push TradePushData
-				if err := json.Unmarshal(msg, &push); err == nil {
-					cb(push)
+				for _, item := range v.GetArray("data") {
+					ts, _ := strconv.ParseInt(string(item.GetStringBytes("ts")), 10, 64)
+					cb(ws.TradeMsg{
+						TradeID:   string(item.GetStringBytes("tradeId")),
+						Price:     string(item.GetStringBytes("price")),
+						Quantity:  string(item.GetStringBytes("size")),
+						Side:      string(item.GetStringBytes("side")),
+						Timestamp: ts,
+					})
 				}
 			}
 		default:
 			log.Debugf("[Bitget:%s] unknown channel: %s", symbol, channel)
 		}
 	}
+}
+
+// parseStringPairs converts a fastjson array of [price, qty] pairs to [][]string.
+func parseStringPairs(arr []*fastjson.Value) [][]string {
+	if len(arr) == 0 {
+		return nil
+	}
+	result := make([][]string, 0, len(arr))
+	for _, item := range arr {
+		pair := item.GetArray()
+		if len(pair) < 2 {
+			continue
+		}
+		result = append(result, []string{
+			string(pair[0].GetStringBytes()),
+			string(pair[1].GetStringBytes()),
+		})
+	}
+	return result
 }
 
 // ToSimpleSymbol converts "BTCUSDT:USDT" to "BTCUSDT".

@@ -2,7 +2,6 @@ package bitget
 
 import (
 	"fmt"
-	"strconv"
 	"sync"
 
 	"github.com/KhavrTrading/flowex/ws"
@@ -120,21 +119,8 @@ func (m *Manager) SubscribeCandleWithInterval(symbol, interval string, handler w
 	sc.interval = interval
 
 	simple := ToSimpleSymbol(symbol)
-	SetCandleCallback(symbol, func(push CandlePushData) {
-		for _, row := range push.Data {
-			if len(row) < 6 {
-				continue
-			}
-			ts, _ := strconv.ParseInt(row[0], 10, 64)
-			worker.EnqueueCandle(ws.CandleMsg{
-				Timestamp: ts,
-				Open:      row[1],
-				High:      row[2],
-				Low:       row[3],
-				Close:     row[4],
-				Volume:    row[5],
-			})
-		}
+	SetCandleCallback(symbol, func(msg ws.CandleMsg) {
+		worker.EnqueueCandle(msg)
 	})
 
 	channel := fmt.Sprintf("candle%s", interval)
@@ -160,15 +146,8 @@ func (m *Manager) SubscribeDepthWithChannel(symbol string, channel DepthChannel,
 	sc.depthChannel = channel
 
 	simple := ToSimpleSymbol(symbol)
-	SetDepthCallback(symbol, func(push DepthPushData) {
-		for _, d := range push.Data {
-			ts := ParseTimestampMs(d.TS)
-			worker.EnqueueDepth(ws.DepthMsg{
-				Bids:      d.Bids,
-				Asks:      d.Asks,
-				Timestamp: ts,
-			})
-		}
+	SetDepthCallback(symbol, func(msg ws.DepthMsg) {
+		worker.EnqueueDepth(msg)
 	})
 
 	m.ActivateStream(symbol, ws.StreamDepth)
@@ -184,17 +163,8 @@ func (m *Manager) SubscribeTrade(symbol string, handler ws.TradeHandler) error {
 	}
 
 	simple := ToSimpleSymbol(symbol)
-	SetTradeCallback(symbol, func(push TradePushData) {
-		for _, t := range push.Data {
-			ts := ParseTimestampMs(t.TS)
-			worker.EnqueueTrade(ws.TradeMsg{
-				TradeID:   t.TradeID,
-				Price:     t.Price,
-				Quantity:  t.Size,
-				Side:      t.Side,
-				Timestamp: ts,
-			})
-		}
+	SetTradeCallback(symbol, func(msg ws.TradeMsg) {
+		worker.EnqueueTrade(msg)
 	})
 
 	m.ActivateStream(symbol, ws.StreamTrade)

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/KhavrTrading/flowex/binance"
-	"github.com/KhavrTrading/flowex/models"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -18,51 +17,48 @@ func main() {
 
 	mgr := binance.NewManager()
 
-	symbol := "BTCUSDT"
-	fmt.Printf("Subscribing to %s on Binance...\n", symbol)
+	symbols := []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT"}
 
-	// Optional: set hooks on the worker before subscribing
-	worker := mgr.GetOrCreateWorker(symbol)
-	worker.SetOnCandleUpdate(func(candles []models.CandleHLCV) {
-		if len(candles) > 0 {
-			last := candles[len(candles)-1]
-			fmt.Printf("  Candle update: C=%.2f V=%.2f (%d candles)\n", last.Close, last.Volume, len(candles))
+	for _, sym := range symbols {
+		if err := mgr.SubscribeAll(sym, nil, nil, nil); err != nil {
+			log.Fatalf("Subscribe %s failed: %v", sym, err)
 		}
-	})
-
-	err := mgr.SubscribeAll(symbol, nil, nil, nil)
-	if err != nil {
-		log.Fatalf("Subscribe failed: %v", err)
+		fmt.Printf("Subscribed to %s\n", sym)
 	}
 
-	// Print snapshots every 5 seconds
+	start := time.Now()
+
+	// Print stats every 5 seconds
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
-			snap := mgr.GetSnapshot(symbol)
-			if snap == nil {
-				fmt.Println("No snapshot yet...")
-				continue
+			elapsed := time.Since(start).Seconds()
+			fmt.Printf("\n=== %.0fs elapsed ===\n", elapsed)
+			var totalProcessed, totalDropped int64
+			for _, sym := range symbols {
+				worker := mgr.GetOrCreateWorker(sym)
+				snap := worker.GetSnapshot()
+				if snap == nil {
+					continue
+				}
+				m := worker.GetMetrics()
+				proc := m["processed"]
+				drops := m["candle_dropped"] + m["depth_dropped"] + m["trade_dropped"]
+				totalProcessed += proc
+				totalDropped += drops
+				fmt.Printf("  %-10s candles=%d depth=%d trades=%d | processed=%d dropped=%d\n",
+					sym,
+					len(snap.Candles),
+					snap.DepthStore.Size(),
+					len(snap.Trades),
+					proc, drops,
+				)
 			}
-			fmt.Printf(
-				"[%s] Candles: %d | Trades: %d | Depth metrics: %d\n",
-				snap.Timestamp.Format("15:04:05"),
-				len(snap.Candles),
-				len(snap.Trades),
-				snap.DepthStore.Size(),
-			)
-			if len(snap.Candles) > 0 {
-				last := snap.Candles[len(snap.Candles)-1]
-				fmt.Printf("  Last candle: O=%.2f H=%.2f L=%.2f C=%.2f V=%.2f\n",
-					last.Open, last.High, last.Low, last.Close, last.Volume)
-			}
-			metrics := worker.GetMetrics()
-			fmt.Printf("  Processed: %d | Dropped: c=%d d=%d t=%d\n",
-				metrics["processed"],
-				metrics["candle_dropped"],
-				metrics["depth_dropped"],
-				metrics["trade_dropped"],
+			fmt.Printf("  TOTAL: %d msgs (%.0f/s) | dropped: %d\n",
+				totalProcessed,
+				float64(totalProcessed)/elapsed,
+				totalDropped,
 			)
 		}
 	}()

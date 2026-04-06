@@ -1,13 +1,13 @@
 package candles
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 
 	"github.com/KhavrTrading/flowex/models"
+	"github.com/valyala/fastjson"
 )
 
 // FetchBinanceCandles fetches historical klines from Binance Futures REST API.
@@ -30,24 +30,32 @@ func FetchBinanceCandles(symbol, interval string, limit int) ([]models.CandleHLC
 		return nil, fmt.Errorf("binance klines status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var raw [][]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return nil, fmt.Errorf("binance klines decode: %w", err)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("binance klines read: %w", err)
 	}
 
+	v, err := fastjson.ParseBytes(body)
+	if err != nil {
+		return nil, fmt.Errorf("binance klines parse: %w", err)
+	}
+
+	raw := v.GetArray()
 	candles := make([]models.CandleHLCV, 0, len(raw))
 	for _, row := range raw {
-		if len(row) < 6 {
+		items := row.GetArray()
+		if len(items) < 6 {
 			continue
 		}
-		ts := int64(row[0].(float64))
-		open := row[1].(string)
-		high := row[2].(string)
-		low := row[3].(string)
-		cl := row[4].(string)
-		vol := row[5].(string)
-
-		c, err := models.NewCandleHLCVFromStrings(ts, open, high, low, cl, vol)
+		// Binance: [timestamp(number), open(string), high, low, close, volume, ...]
+		ts := items[0].GetInt64()
+		c, err := models.NewCandleHLCVFromStrings(ts,
+			string(items[1].GetStringBytes()),
+			string(items[2].GetStringBytes()),
+			string(items[3].GetStringBytes()),
+			string(items[4].GetStringBytes()),
+			string(items[5].GetStringBytes()),
+		)
 		if err != nil {
 			continue
 		}
@@ -75,24 +83,31 @@ func FetchBinanceCandleHLC(symbol, interval string, limit int) ([]models.CandleH
 		return nil, fmt.Errorf("binance klines status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var raw [][]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return nil, fmt.Errorf("binance klines decode: %w", err)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("binance klines read: %w", err)
 	}
 
+	v, err := fastjson.ParseBytes(body)
+	if err != nil {
+		return nil, fmt.Errorf("binance klines parse: %w", err)
+	}
+
+	raw := v.GetArray()
 	candles := make([]models.CandleHLC, 0, len(raw))
 	for _, row := range raw {
-		if len(row) < 6 {
+		items := row.GetArray()
+		if len(items) < 6 {
 			continue
 		}
-		slice := make([]string, 6)
-		slice[0] = strconv.FormatInt(int64(row[0].(float64)), 10)
-		slice[1] = row[1].(string) // open (unused but keeps index)
-		slice[2] = row[2].(string) // high
-		slice[3] = row[3].(string) // low
-		slice[4] = row[4].(string) // close
-		slice[5] = row[5].(string) // volume (unused)
-
+		slice := []string{
+			strconv.FormatInt(items[0].GetInt64(), 10),
+			string(items[1].GetStringBytes()), // open (unused but keeps index)
+			string(items[2].GetStringBytes()), // high
+			string(items[3].GetStringBytes()), // low
+			string(items[4].GetStringBytes()), // close
+			string(items[5].GetStringBytes()), // volume (unused)
+		}
 		c, err := models.NewCandleHLCFromSlice(slice)
 		if err != nil {
 			continue

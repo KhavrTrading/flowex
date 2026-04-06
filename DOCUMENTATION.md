@@ -75,6 +75,18 @@ type CandleHLCV struct {
 
 Helper methods: `GetTimestamp()`, `HL2()` (High+Low)/2, `HLC3()` (High+Low+Close)/3.
 
+Constructors:
+
+```go
+// From individual string fields (timestamp already parsed)
+c, err := models.NewCandleHLCVFromStrings(ts, "100.5", "101.0", "99.8", "100.2", "1500.0")
+
+// From a string slice: [ts, open, high, low, close, volume]
+c, err := models.NewCandleHLCVFromSlice([]string{"1672515780000", "100.5", "101.0", "99.8", "100.2", "1500.0"})
+```
+
+`NewCandleHLCVFromSlice` parses `slice[0]` as the int64 timestamp then delegates to `NewCandleHLCVFromStrings`.
+
 ### CandleHLC
 
 Lighter candle without Open/Volume. Used by ATR, Bollinger, and Support/Resistance indicators.
@@ -288,17 +300,23 @@ latest := store.GetLatest()
 // Copy of the recent metrics buffer (default last 100 entries)
 recent := store.GetRecent()
 
+// Last N metrics from the recent buffer (returns all if n >= buffer length)
+last20 := store.GetRecentN(20)
+
 // All metrics from the last N seconds
 last30s := store.GetLastNSeconds(30)
 
 // Metrics within a specific time window (Unix milliseconds, inclusive)
 ranged := store.GetByTimeRange(startMs, endMs)
 
+// Alias for GetByTimeRange — same clamping behavior, matches PerSymbolDepthStore API
+clamped := store.GetMetricsByTimeRangeClamped(startMs, endMs)
+
 // Total number of stored metrics
 count := store.Size()
 ```
 
-All methods are thread-safe (read-locked). `GetLatest()` and `GetRecent()` return copies — safe to hold across calls.
+All methods are thread-safe (read-locked). `GetLatest()`, `GetRecent()`, and `GetRecentN()` return copies — safe to hold across calls.
 
 ---
 
