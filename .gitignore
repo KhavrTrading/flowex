@@ -5,6 +5,13 @@
 *.so
 *.dylib
 
+# cgo c-shared generated header (sits next to the DLL)
+/flowex.h
+
+# Rust build output
+/rust/target/
+**/Cargo.lock
+
 # Test binary
 *.test
 

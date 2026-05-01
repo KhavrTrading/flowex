@@ -4,10 +4,17 @@ import "strconv"
 
 // CandleHLC represents a candle with High, Low, Close prices (no volume).
 type CandleHLC struct {
-	ts   int64 // internal unix-ms timestamp of this bar
-	High float64
-	Low  float64
+	ts    int64 // internal unix-ms timestamp of this bar
+	High  float64
+	Low   float64
 	Close float64
+}
+
+// NewCandleHLC builds a CandleHLC from its constituent fields. Useful for
+// callers (e.g. cgo wrappers) that need to construct one without parsing a
+// string slice.
+func NewCandleHLC(ts int64, high, low, close float64) CandleHLC {
+	return CandleHLC{ts: ts, High: high, Low: low, Close: close}
 }
 
 // NewCandleHLCFromSlice parses a CandleHLC from a string slice.
@@ -39,12 +46,12 @@ func (c CandleHLC) GetClose() float64   { return c.Close }
 
 // CandleHLCV represents a candle with Open, High, Low, Close prices and Volume.
 type CandleHLCV struct {
-	Ts     int64   // Unix-ms timestamp of this bar
-	Open   float64
-	High   float64
-	Low    float64
-	Close  float64
-	Volume float64
+	Ts     int64   `json:"ts"` // Unix-ms timestamp of this bar
+	Open   float64 `json:"open"`
+	High   float64 `json:"high"`
+	Low    float64 `json:"low"`
+	Close  float64 `json:"close"`
+	Volume float64 `json:"volume"`
 }
 
 // NewCandleHLCVFromSlice parses a CandleHLCV from a string slice.

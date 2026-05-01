@@ -1,0 +1,10 @@
+[package]
+name = "flowex-sys"
+description = "Raw FFI bindings to the flowex C-ABI shared library"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+libloading = { workspace = true }
