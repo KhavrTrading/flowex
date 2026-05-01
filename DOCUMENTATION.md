@@ -323,14 +323,10 @@ All methods are thread-safe (read-locked). `GetLatest()`, `GetRecent()`, and `Ge
 
 ## Historical Data Seeding
 
-Most strategies need candle history on startup. Fetch via REST, then feed into the worker:
+Most strategies need candle history on startup. Fetch via REST, then seed the worker BEFORE subscribing to live streams:
 
 ```go
 mgr := binance.NewManager()
-mgr.SubscribeAll("BTCUSDT", nil, nil, nil)
-
-// Access the worker
-worker := mgr.GetOrCreateWorker("BTCUSDT")
 
 // Fetch historical candles via REST
 hist, err := candles.FetchBinanceCandles("BTCUSDT", "1m", 500)
@@ -338,12 +334,21 @@ if err != nil {
     log.Fatal(err)
 }
 
-// Seed them into the worker
-worker.SeedCandles(hist)
-// Snapshot now has 500 candles immediately — no waiting for live bars
+// Seed and subscribe atomically — no race, no drops
+if err := mgr.SubscribeAllWithSeed("BTCUSDT", hist); err != nil {
+    log.Fatal(err)
+}
+// Snapshot has 500 candles and indicators immediately — no waiting for live bars
 ```
 
-`SeedCandles` converts each `CandleHLCV` to a `CandleMsg` and enqueues it. The worker deduplicates by timestamp, so overlapping historical and live data is safe.
+### Two seeding paths
+
+| Method | When to use | Semantics |
+| --- | --- | --- |
+| `Manager.SubscribeAllWithSeed(symbol, seed)` / `Worker.SeedCandlesDirect(seed)` | **Startup** (recommended) | Synchronous, runs before any live data flows. Writes `w.candles` directly, computes indicators once, publishes the snapshot. Zero drops. |
+| `Worker.SeedCandles(seed)` | Post-subscribe gap-fill (e.g., reconnect) | Goroutine-safe, but lossy: each candle is enqueued via the non-blocking candle channel and may be dropped under load. |
+
+`SeedCandlesDirect` carries a contract: callers MUST invoke it before the first `SubscribeCandle` / `SubscribeAll`, because the worker's `loop()` goroutine is already running. `SubscribeAllWithSeed` enforces this ordering automatically.
 
 The `CandleMsg` struct expects string values (matching the raw WebSocket format):
 

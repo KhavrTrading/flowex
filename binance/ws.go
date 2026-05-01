@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/KhavrTrading/flowex/models"
 	"github.com/KhavrTrading/flowex/ws"
 )
 
@@ -210,6 +211,15 @@ func (m *Manager) SubscribeAll(symbol string, ch ws.CandleHandler, dh ws.DepthHa
 		return err
 	}
 	return m.SubscribeTrade(symbol, th)
+}
+
+// SubscribeAllWithSeed seeds historical candles into the worker BEFORE
+// subscribing to live streams, guaranteeing no race between seed and live
+// data. seed must be sorted ascending by timestamp.
+func (m *Manager) SubscribeAllWithSeed(symbol string, seed []models.CandleHLCV) error {
+	w := m.GetOrCreateWorker(symbol)
+	w.SeedCandlesDirect(seed)
+	return m.SubscribeAll(symbol, nil, nil, nil)
 }
 
 // Unsubscribe removes a specific stream for a symbol.

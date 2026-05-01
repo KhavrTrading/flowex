@@ -16,7 +16,7 @@ import (
 
 // WorkerConfig holds tunable parameters for a SymbolWorker.
 type WorkerConfig struct {
-	CandleChSize int // Candle channel buffer (default 64)
+	CandleChSize int // Candle channel buffer (default 256)
 	DepthChSize  int // Depth channel buffer (default 2048)
 	TradeChSize  int // Trade channel buffer (default 2048)
 
@@ -33,7 +33,7 @@ type WorkerConfig struct {
 // DefaultWorkerConfig returns production-tested defaults.
 func DefaultWorkerConfig() WorkerConfig {
 	return WorkerConfig{
-		CandleChSize:       64,
+		CandleChSize:       256,
 		DepthChSize:        2048,
 		TradeChSize:        2048,
 		MaxCandles:         750,
@@ -214,6 +214,11 @@ func (w *SymbolWorker) applyCandle(msg CandleMsg) {
 				w.candles = w.candles[1:]
 			}
 			w.candles = append(w.candles, c)
+		default:
+			// c.GetTimestamp() < lastTs — out-of-order, drop and record
+			w.candleDropped.Add(1)
+			w.addError(fmt.Sprintf("out-of-order candle: incoming=%d last=%d", c.GetTimestamp(), lastTs))
+			return
 		}
 	}
 
@@ -324,8 +329,10 @@ func (w *SymbolWorker) EnqueueTrade(msg TradeMsg) {
 	}
 }
 
-// SeedCandles bulk-loads historical candles into the worker.
-// Candles are enqueued in order and deduplicated by the worker's timestamp logic.
+// SeedCandles bulk-loads historical candles into the worker via the candle channel.
+// Goroutine-safe but lossy under load: enqueue uses a non-blocking send that drops on
+// a full channel. Use SeedCandlesDirect (or Manager.SubscribeAllWithSeed) for startup
+// seeding; reserve SeedCandles for post-subscribe gap-fill (e.g., reconnect catch-up).
 func (w *SymbolWorker) SeedCandles(candles []models.CandleHLCV) {
 	for _, c := range candles {
 		w.EnqueueCandle(CandleMsg{
@@ -337,6 +344,36 @@ func (w *SymbolWorker) SeedCandles(candles []models.CandleHLCV) {
 			Volume:    fmt.Sprintf("%g", c.Volume),
 		})
 	}
+}
+
+// SeedCandlesDirect synchronously replaces the worker's candle history and
+// recomputes indicators once. Candles must be sorted ascending by timestamp;
+// the slice is trimmed to MaxCandles, keeping the most recent.
+//
+// CONTRACT: Caller MUST invoke this BEFORE any live data reaches the worker
+// (i.e., before the first SubscribeCandle / SubscribeAll). The worker's
+// loop() goroutine is already running at construction, so this method is NOT
+// safe to call concurrently with EnqueueCandle. Use Manager.SubscribeAllWithSeed
+// to enforce this ordering.
+//
+// Note: the periodic snapshot tick (SnapshotInterval, default 1s) reads
+// w.candles from loop(); under `go test -race` you may see a benign race
+// report if the seed lands during a tick. In production this is invisible
+// because seed runs once at startup well before any consumer reads the snapshot.
+func (w *SymbolWorker) SeedCandlesDirect(candles []models.CandleHLCV) {
+	if len(candles) == 0 {
+		return
+	}
+	if len(candles) > w.config.MaxCandles {
+		candles = candles[len(candles)-w.config.MaxCandles:]
+	}
+	w.candles = append(w.candles[:0], candles...)
+	if len(w.candles) >= 14 {
+		w.indicators = technical.CalculateTechnicalIndicators(
+			w.candles, w.candles[len(w.candles)-1].Close,
+		)
+	}
+	w.updateSnapshot()
 }
 
 // ===================== SNAPSHOT =====================
