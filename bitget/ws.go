@@ -69,7 +69,7 @@ func NewManagerWithConfig(cfg ManagerConfig) *Manager {
 		cfg:       cfg,
 		streamCfg: make(map[string]*symbolStreamCfg),
 	}
-	m.BaseManager = ws.NewBaseManager("Bitget", cfg.WorkerConfig, func(symbol string) (*ws.BaseClient, error) {
+	m.BaseManager = ws.NewBaseManager("Bitget", cfg.WorkerConfig, func(symbol, _ string) (*ws.BaseClient, error) {
 		client, err := NewClient(symbol)
 		if err != nil {
 			return nil, err

@@ -11,9 +11,10 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// NewClient creates a Binance futures WebSocket client for one symbol.
-func NewClient(symbol string) (*ws.BaseClient, error) {
-	cfg := ws.DefaultClientConfig("Binance", "wss://fstream.binance.com/market/ws")
+// NewClient creates a Binance futures WebSocket client for one symbol and endpoint.
+// url should be "wss://fstream.binance.com/market/ws" or "wss://fstream.binance.com/public/ws".
+func NewClient(symbol, url string) (*ws.BaseClient, error) {
+	cfg := ws.DefaultClientConfig("Binance", url)
 	// Binance doesn't need application-level ping (server pings at protocol level)
 
 	client := ws.NewBaseClient(symbol, cfg)

@@ -2,6 +2,7 @@ package binance
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/KhavrTrading/flowex/models"
@@ -83,13 +84,20 @@ func NewManagerWithConfig(cfg ManagerConfig) *Manager {
 		cfg:       cfg,
 		streamCfg: make(map[string]*symbolStreamCfg),
 	}
-	m.BaseManager = ws.NewBaseManager("Binance", cfg.WorkerConfig, func(symbol string) (*ws.BaseClient, error) {
-		client, err := NewClient(symbol)
+	m.BaseManager = ws.NewBaseManager("Binance", cfg.WorkerConfig, func(symbol, clientKey string) (*ws.BaseClient, error) {
+		parts := strings.Split(clientKey, "|")
+		urlType := "market"
+		if len(parts) > 1 {
+			urlType = parts[1]
+		}
+		url := fmt.Sprintf("wss://fstream.binance.com/%s/ws", urlType)
+
+		client, err := NewClient(symbol, url)
 		if err != nil {
 			return nil, err
 		}
 		client.SetResubscribe(func(c *ws.BaseClient) error {
-			return m.resubscribeAll(symbol, c)
+			return m.resubscribeAll(symbol, clientKey, c)
 		})
 		return client, nil
 	})
@@ -128,7 +136,8 @@ func (m *Manager) SubscribeCandle(symbol string, handler ws.CandleHandler) error
 // Intervals: "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "1w".
 func (m *Manager) SubscribeCandleWithInterval(symbol, interval string, handler ws.CandleHandler) error {
 	worker := m.GetOrCreateWorker(symbol)
-	client, err := m.GetOrCreateClient(symbol)
+	clientKey := symbol + "|market"
+	client, err := m.GetOrCreateClientByKey(symbol, clientKey)
 	if err != nil {
 		return fmt.Errorf("binance candle %s: %w", symbol, err)
 	}
@@ -140,7 +149,7 @@ func (m *Manager) SubscribeCandleWithInterval(symbol, interval string, handler w
 		worker.EnqueueCandle(msg)
 	})
 
-	m.ActivateStream(symbol, ws.StreamCandle)
+	m.ActivateStreamByKey(symbol, clientKey, ws.StreamCandle)
 	return SubscribeStream(client, CandleStreamName(symbol, interval), 1)
 }
 
@@ -153,7 +162,8 @@ func (m *Manager) SubscribeDepth(symbol string, handler ws.DepthHandler) error {
 // levels: Depth5, Depth10, Depth20. speed: Speed100ms, Speed250ms, Speed500ms.
 func (m *Manager) SubscribeDepthWithConfig(symbol string, level DepthLevel, speed DepthSpeed, handler ws.DepthHandler) error {
 	worker := m.GetOrCreateWorker(symbol)
-	client, err := m.GetOrCreateClient(symbol)
+	clientKey := symbol + "|public"
+	client, err := m.GetOrCreateClientByKey(symbol, clientKey)
 	if err != nil {
 		return fmt.Errorf("binance depth %s: %w", symbol, err)
 	}
@@ -166,7 +176,7 @@ func (m *Manager) SubscribeDepthWithConfig(symbol string, level DepthLevel, spee
 		worker.EnqueueDepth(msg)
 	})
 
-	m.ActivateStream(symbol, ws.StreamDepth)
+	m.ActivateStreamByKey(symbol, clientKey, ws.StreamDepth)
 	return SubscribeStream(client, DepthStreamName(symbol, int(level), string(speed)), 2)
 }
 
@@ -179,7 +189,8 @@ func (m *Manager) SubscribeTrade(symbol string, handler ws.TradeHandler) error {
 // mode: TradeAggregated (aggTrade) or TradeIndividual (trade).
 func (m *Manager) SubscribeTradeWithMode(symbol string, mode TradeMode, handler ws.TradeHandler) error {
 	worker := m.GetOrCreateWorker(symbol)
-	client, err := m.GetOrCreateClient(symbol)
+	clientKey := symbol + "|market"
+	client, err := m.GetOrCreateClientByKey(symbol, clientKey)
 	if err != nil {
 		return fmt.Errorf("binance trade %s: %w", symbol, err)
 	}
@@ -191,7 +202,7 @@ func (m *Manager) SubscribeTradeWithMode(symbol string, mode TradeMode, handler 
 		worker.EnqueueTrade(msg)
 	})
 
-	m.ActivateStream(symbol, ws.StreamTrade)
+	m.ActivateStreamByKey(symbol, clientKey, ws.StreamTrade)
 
 	var stream string
 	if mode == TradeIndividual {
@@ -224,20 +235,24 @@ func (m *Manager) SubscribeAllWithSeed(symbol string, seed []models.CandleHLCV) 
 
 // Unsubscribe removes a specific stream for a symbol.
 func (m *Manager) Unsubscribe(symbol string, st ws.StreamType) error {
-	m.DeactivateStream(symbol, st)
+	clientKey := symbol + "|market"
+	if st == ws.StreamDepth {
+		clientKey = symbol + "|public"
+	}
+	m.DeactivateStreamByKey(symbol, clientKey, st)
 	return nil
 }
 
 // UnsubscribeAll removes all streams for a symbol.
 func (m *Manager) UnsubscribeAll(symbol string) error {
-	m.DeactivateStream(symbol, ws.StreamCandle)
-	m.DeactivateStream(symbol, ws.StreamDepth)
-	m.DeactivateStream(symbol, ws.StreamTrade)
+	m.DeactivateStreamByKey(symbol, symbol+"|market", ws.StreamCandle)
+	m.DeactivateStreamByKey(symbol, symbol+"|public", ws.StreamDepth)
+	m.DeactivateStreamByKey(symbol, symbol+"|market", ws.StreamTrade)
 	return nil
 }
 
-func (m *Manager) resubscribeAll(symbol string, client *ws.BaseClient) error {
-	streams := m.GetActiveStreams(symbol)
+func (m *Manager) resubscribeAll(symbol, clientKey string, client *ws.BaseClient) error {
+	streams := m.GetActiveStreamsByKey(clientKey)
 	sc := m.getStreamCfg(symbol)
 
 	for st := range streams {
