@@ -13,7 +13,7 @@ import (
 
 // NewClient creates a Binance futures WebSocket client for one symbol.
 func NewClient(symbol string) (*ws.BaseClient, error) {
-	cfg := ws.DefaultClientConfig("Binance", "wss://fstream.binance.com/ws")
+	cfg := ws.DefaultClientConfig("Binance", "wss://fstream.binance.com/market/ws")
 	// Binance doesn't need application-level ping (server pings at protocol level)
 
 	client := ws.NewBaseClient(symbol, cfg)
