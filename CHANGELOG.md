@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased (v0.4.2)
+
+### Fixes
+- **Binance**: aggTrade `TradeID` now reads the aggregate id `a` (was `t`, which aggTrade lacks, so every id was `"0"`); plain `trade` events still read `t`.
+
 ## v0.1.0 (2026-03-26)
 
 Initial public release.

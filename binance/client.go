@@ -145,8 +145,12 @@ func makeDispatcher(client *ws.BaseClient, symbol string) ws.DispatchFunc {
 			}
 		case "aggTrade", "trade":
 			if cb := tradeCallbacks[symbol]; cb != nil {
+				idKey := "t" // trade id
+				if eventType == "aggTrade" {
+					idKey = "a" // aggregate trade id; aggTrade has no "t"
+				}
 				cb(ws.TradeMsg{
-					TradeID:      fmt.Sprintf("%d", v.GetInt64("t")),
+					TradeID:      fmt.Sprintf("%d", v.GetInt64(idKey)),
 					Price:        string(v.GetStringBytes("p")),
 					Quantity:     string(v.GetStringBytes("q")),
 					IsBuyerMaker: v.GetBool("m"),
